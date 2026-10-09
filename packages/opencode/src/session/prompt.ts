@@ -1144,8 +1144,9 @@ const layer = Layer.effect(
             if (hasToolCalls) return false
             if (msg.parentID !== lastUser.id) return false
             const cfg = yield* config.get()
-            // Default ON in this fork; only an explicit `false` disables it.
-            if (cfg.experimental?.auto_continue === false) return false
+            // Opt-in: default OFF so stock behavior/tests are unchanged; enable via
+            // `experimental.auto_continue: true`.
+            if (cfg.experimental?.auto_continue !== true) return false
             if (!hasVisibleOutput(msg)) {
               // Durable budget: max 3 auto-continues after the last real user
               // message. Counted from history so a resumed `opencode run
@@ -1395,10 +1396,11 @@ const layer = Layer.effect(
 
             // Ladder error: "every rung failed" / ladder_error (502).
             // Auto-continue with backoff up to LADDER_AUTO_CONTINUE_LIMIT times.
+            // Opt-in: enable via `experimental.auto_continue: true`.
             const autoContinueCfg = yield* config.get()
             if (
               finished &&
-              autoContinueCfg.experimental?.auto_continue !== false &&
+              autoContinueCfg.experimental?.auto_continue === true &&
               handle.message.error &&
               SessionV1.APIError.isInstance(handle.message.error) &&
               /every rung failed|ladder_error/i.test(handle.message.error.data.message)
