@@ -43,7 +43,7 @@ import { Truncate } from "@/tool/truncate"
 import { Image } from "@/image/image"
 import { decodeDataUrl } from "@/util/data-url"
 import { Process } from "@/util/process"
-import { Cause, Effect, Exit, Latch, Layer, Option, Schedule, Scope, Context, Schema, Types } from "effect"
+import { Cause, Duration, Effect, Exit, Latch, Layer, Option, Schedule, Scope, Context, Schema, Types } from "effect"
 import { InstanceState } from "@/effect/instance-state"
 import { TaskTool, type TaskPromptOps } from "@/tool/task"
 import { SessionRunState } from "./run-state"
@@ -83,6 +83,10 @@ IMPORTANT:
 const STRUCTURED_OUTPUT_SYSTEM_PROMPT = `IMPORTANT: The user has requested structured output. You MUST use the StructuredOutput tool to provide your final response. Do NOT respond with plain text - you MUST call the StructuredOutput tool with your answer formatted according to the schema.`
 
 const AUTO_CONTINUE_LIMIT = 3
+// "every rung failed" / ladder_error from the LLM ladder worker (502). The whole
+// rung chain is down; retrying immediately only burns attempts, so back off.
+const LADDER_AUTO_CONTINUE_LIMIT = 5
+const LADDER_BACKOFF_MS = [30_000, 60_000, 120_000]
 
 function mcpResourceBase64Size(value: string) {
   const trimmed = value.replace(/\s/g, "")
@@ -1140,7 +1144,8 @@ const layer = Layer.effect(
             if (hasToolCalls) return false
             if (msg.parentID !== lastUser.id) return false
             const cfg = yield* config.get()
-            if (cfg.experimental?.auto_continue !== true) return false
+            // Default ON in this fork; only an explicit `false` disables it.
+            if (cfg.experimental?.auto_continue === false) return false
             if (!hasVisibleOutput(msg)) {
               // Durable budget: max 3 auto-continues after the last real user
               // message. Counted from history so a resumed `opencode run
@@ -1386,6 +1391,56 @@ const layer = Layer.effect(
                 yield* sessions.updateMessage(handle.message)
                 return "break" as const
               }
+            }
+
+            // Ladder error: "every rung failed" / ladder_error (502).
+            // Auto-continue with backoff up to LADDER_AUTO_CONTINUE_LIMIT times.
+            const autoContinueCfg = yield* config.get()
+            if (
+              finished &&
+              autoContinueCfg.experimental?.auto_continue !== false &&
+              handle.message.error &&
+              SessionV1.APIError.isInstance(handle.message.error) &&
+              /every rung failed|ladder_error/i.test(handle.message.error.data.message)
+            ) {
+              const isLadderAuto = (m: (typeof msgs)[number]) =>
+                m.info.role === "user" &&
+                m.parts.some((p) => p.type === "text" && p.metadata?.ladder_auto_continue === true)
+              const lastRealUser = msgs.findLastIndex((m) => m.info.role === "user" && !isLadderAuto(m))
+              const attempts = msgs.slice(lastRealUser + 1).filter(isLadderAuto).length
+              if (attempts < LADDER_AUTO_CONTINUE_LIMIT) {
+                const backoffMs = LADDER_BACKOFF_MS[Math.min(attempts, LADDER_BACKOFF_MS.length - 1)]
+                yield* Effect.logWarning("ladder error, auto-continue with backoff", {
+                  "session.id": sessionID,
+                  attempt: attempts + 1,
+                  backoffMs,
+                  message: handle.message.error.data.message,
+                })
+                yield* Effect.sleep(Duration.millis(backoffMs))
+                const continueMsg = yield* sessions.updateMessage({
+                  id: MessageID.ascending(),
+                  role: "user",
+                  sessionID,
+                  time: { created: Date.now() },
+                  agent: lastUser.agent,
+                  model: lastUser.model,
+                })
+                yield* sessions.updatePart({
+                  id: PartID.ascending(),
+                  messageID: continueMsg.id,
+                  sessionID,
+                  type: "text" as const,
+                  text: "The model provider ladder is exhausted. Please retry.",
+                  synthetic: true,
+                  metadata: { ladder_auto_continue: true },
+                  time: { start: Date.now(), end: Date.now() },
+                })
+                return "continue" as const
+              }
+              yield* Effect.logError("ladder error: max auto-continue attempts reached", {
+                "session.id": sessionID,
+                attempts,
+              })
             }
 
             if (result === "stop") return "break" as const
