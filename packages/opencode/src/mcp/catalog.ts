@@ -8,7 +8,7 @@ import {
 import { dynamicTool, jsonSchema, type JSONSchema7, type Tool } from "ai"
 import { Effect } from "effect"
 
-const DEFAULT_TIMEOUT = 30_000
+const DEFAULT_TIMEOUT = 300_000
 const MAX_LIST_PAGES = 1_000
 
 const TolerantListToolsResultSchema = ListToolsResultSchema.extend({

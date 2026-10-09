@@ -82,6 +82,8 @@ IMPORTANT:
 
 const STRUCTURED_OUTPUT_SYSTEM_PROMPT = `IMPORTANT: The user has requested structured output. You MUST use the StructuredOutput tool to provide your final response. Do NOT respond with plain text - you MUST call the StructuredOutput tool with your answer formatted according to the schema.`
 
+const AUTO_CONTINUE_LIMIT = 3
+
 function mcpResourceBase64Size(value: string) {
   const trimmed = value.replace(/\s/g, "")
   const padding = trimmed.endsWith("==") ? 2 : trimmed.endsWith("=") ? 1 : 0
@@ -1117,6 +1119,43 @@ const layer = Layer.effect(
               (part) => part.type === "tool" && !part.metadata?.providerExecuted && !isOrphanedInterruptedTool(part),
             ) ?? false
 
+          // Check if assistant finished with no visible output (auto-continue trigger)
+          const hasVisibleOutput = (msg: SessionV1.Assistant): boolean => {
+            const parts = msgs
+              .filter((m) => m.info.role === "assistant" && m.info.id === msg.id)
+              .flatMap((m) => m.parts)
+            return parts.some(
+              (p) =>
+                (p.type === "text" && p.text?.trim().length > 0) ||
+                (p.type === "tool" && p.state?.status === "completed"),
+            )
+          }
+
+          const shouldAutoContinue = Effect.fn("SessionPrompt.shouldAutoContinue")(function* (
+            msg: SessionV1.Assistant,
+            error: boolean,
+          ) {
+            if (!msg.finish || ["tool-calls", "unknown"].includes(msg.finish)) return false
+            if (error) return false
+            if (hasToolCalls) return false
+            if (msg.parentID !== lastUser.id) return false
+            const cfg = yield* config.get()
+            if (cfg.experimental?.auto_continue !== true) return false
+            if (!hasVisibleOutput(msg)) {
+              // Durable budget: max 3 auto-continues after the last real user
+              // message. Counted from history so a resumed `opencode run
+              // --session` does not receive a fresh budget every drain.
+              const isAutoContinue = (m: (typeof msgs)[number]) =>
+                m.info.role === "user" &&
+                m.parts.some((p) => p.type === "text" && p.metadata?.auto_continue === true)
+              const lastRealUser = msgs.findLastIndex((m) => m.info.role === "user" && !isAutoContinue(m))
+              const attempts = msgs.slice(lastRealUser + 1).filter(isAutoContinue).length
+              if (attempts >= AUTO_CONTINUE_LIMIT) return false
+              return true
+            }
+            return false
+          })
+
           if (
             lastAssistant?.finish &&
             !["tool-calls", "unknown"].includes(lastAssistant.finish) &&
@@ -1133,6 +1172,30 @@ const layer = Layer.effect(
                 tool: orphan.tool,
                 callID: orphan.callID,
               })
+            }
+            // Check for auto-continue before exiting
+            const autoContinue = yield* shouldAutoContinue(lastAssistant, !!lastAssistant.error)
+            if (autoContinue) {
+              yield* Effect.logInfo("auto-continue: no visible output, continuing", { "session.id": sessionID })
+              const continueMsg = yield* sessions.updateMessage({
+                id: MessageID.ascending(),
+                role: "user",
+                sessionID,
+                time: { created: Date.now() },
+                agent: lastUser.agent,
+                model: lastUser.model,
+              })
+              yield* sessions.updatePart({
+                id: PartID.ascending(),
+                messageID: continueMsg.id,
+                sessionID,
+                type: "text" as const,
+                text: "Continue.",
+                synthetic: true,
+                metadata: { auto_continue: true },
+                time: { start: Date.now(), end: Date.now() },
+              })
+              continue
             }
             yield* Effect.logInfo("exiting loop", { "session.id": sessionID })
             break
