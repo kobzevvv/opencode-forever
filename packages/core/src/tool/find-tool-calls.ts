@@ -9,6 +9,7 @@ import { PermissionV2 } from "../permission"
 import { SessionMessage } from "../session/message"
 import { SessionSchema } from "../session/schema"
 import { SessionMessageTable } from "../session/sql"
+import { PII } from "../session/pii"
 import { ToolRegistry } from "./registry"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
@@ -62,7 +63,7 @@ const decodeMessage = Schema.decodeUnknownEffect(SessionMessage.Message)
 const bound = (text: string, max: number) => (text.length <= max ? text : text.slice(0, max))
 
 const inputSummary = (input: unknown) => {
-  if (typeof input === "string") return input === "" ? undefined : bound(input, INPUT_SUMMARY_CHARS)
+  if (typeof input === "string") return input === "" ? undefined : bound(PII.redact(input).text, INPUT_SUMMARY_CHARS)
   if (input === null || typeof input !== "object") return undefined
   const entries = Object.entries(input as Record<string, unknown>)
     .map(([key, value]) => {
@@ -71,7 +72,7 @@ const inputSummary = (input: unknown) => {
       return undefined
     })
     .filter((line): line is string => line !== undefined)
-  return entries.length === 0 ? undefined : bound(entries.join(" "), INPUT_SUMMARY_CHARS)
+  return entries.length === 0 ? undefined : bound(PII.redact(entries.join(" ")).text, INPUT_SUMMARY_CHARS)
 }
 
 const contentText = (content: readonly SessionMessage.ToolStateCompleted["content"][number][]) =>
@@ -96,9 +97,13 @@ const toolCandidates = (message: SessionMessage.Assistant, seq: number): readonl
     if (item.type !== "tool") return []
     const state = item.state
     const input = inputSummary(state.input)
-    const preview =
-      state.status === "completed" || state.status === "error" ? bound(contentText(state.content), PREVIEW_CHARS) : undefined
-    const error = state.status === "error" ? bound(state.error.message, PREVIEW_CHARS) : undefined
+    // haystack stays raw: it is internal (never returned to the model) so the
+    // agent can still regex-match original content; all model-visible fields
+    // are redacted.
+    const raw =
+      state.status === "completed" || state.status === "error" ? contentText(state.content) : undefined
+    const preview = raw === undefined ? undefined : bound(PII.redact(raw).text, PREVIEW_CHARS)
+    const error = state.status === "error" ? bound(PII.redact(state.error.message).text, PREVIEW_CHARS) : undefined
     return [
       {
         call_id: item.id,
@@ -109,20 +114,22 @@ const toolCandidates = (message: SessionMessage.Assistant, seq: number): readonl
         ...(input === undefined ? {} : { input }),
         ...(preview === undefined ? {} : { preview }),
         ...(error === undefined ? {} : { error }),
-        haystack: [input, preview, error].filter((part): part is string => part !== undefined).join("\n"),
+        haystack: [input, raw, state.status === "error" ? state.error.message : undefined]
+          .filter((part): part is string => part !== undefined)
+          .join("\n"),
       },
     ]
   })
 
 const shellCandidate = (message: SessionMessage.Shell, seq: number): Candidate => {
-  const preview = bound(message.output, PREVIEW_CHARS)
+  const preview = bound(PII.redact(message.output).text, PREVIEW_CHARS)
   return {
     call_id: message.callID,
     tool: "bash",
     status: "completed",
     message_id: message.id,
     seq,
-    input: bound(message.command, INPUT_SUMMARY_CHARS),
+    input: bound(PII.redact(message.command).text, INPUT_SUMMARY_CHARS),
     preview,
     haystack: `${message.command}\n${message.output}`,
   }

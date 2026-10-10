@@ -1,6 +1,7 @@
 import { Effect, Schema } from "effect"
 import { and, eq, sql } from "drizzle-orm"
 import { Database } from "@opencode-ai/core/database/database"
+import { PII } from "@opencode-ai/core/session/pii"
 import { PartTable } from "@opencode-ai/core/session/sql"
 import type { SessionID } from "../session/schema"
 import * as Tool from "./tool"
@@ -35,7 +36,7 @@ type Metadata = { matched: number }
 const bound = (text: string, max: number) => (text.length <= max ? text : text.slice(0, max))
 
 const inputSummary = (input: unknown) => {
-  if (typeof input === "string") return input === "" ? undefined : bound(input, INPUT_SUMMARY_CHARS)
+  if (typeof input === "string") return input === "" ? undefined : bound(PII.redact(input).text, INPUT_SUMMARY_CHARS)
   if (input === null || typeof input !== "object") return undefined
   const entries = Object.entries(input as Record<string, unknown>)
     .map(([key, value]) => {
@@ -44,7 +45,7 @@ const inputSummary = (input: unknown) => {
       return undefined
     })
     .filter((line): line is string => line !== undefined)
-  return entries.length === 0 ? undefined : bound(entries.join(" "), INPUT_SUMMARY_CHARS)
+  return entries.length === 0 ? undefined : bound(PII.redact(entries.join(" ")).text, INPUT_SUMMARY_CHARS)
 }
 
 export type Candidate = {
@@ -71,15 +72,18 @@ const candidate = (data: unknown, id: string): Candidate | undefined => {
   const input = inputSummary(state?.input)
   const output = typeof state?.output === "string" ? state.output : undefined
   const error = typeof state?.error === "string" ? state.error : undefined
-  const preview = output === undefined && error === undefined ? undefined : bound([output, error].filter(Boolean).join("\n"), PREVIEW_CHARS)
+  const raw = [output, error].filter((piece): piece is string => typeof piece === "string" && piece !== "").join("\n")
+  // haystack stays raw (internal, never returned to the model); model-visible
+  // fields are redacted.
+  const preview = raw === "" ? undefined : bound(PII.redact(raw).text, PREVIEW_CHARS)
   return {
     call_id: part.callID,
     tool: part.tool ?? "unknown",
     status: state?.status ?? "pending",
     ...(input === undefined ? {} : { input }),
     ...(preview === undefined ? {} : { preview }),
-    ...(error === undefined ? {} : { error: bound(error, PREVIEW_CHARS) }),
-    haystack: [input, preview].filter((piece): piece is string => piece !== undefined).join("\n"),
+    ...(error === undefined ? {} : { error: bound(PII.redact(error).text, PREVIEW_CHARS) }),
+    haystack: [input, raw].filter((piece): piece is string => piece !== undefined && piece !== "").join("\n"),
     seq: id,
   }
 }

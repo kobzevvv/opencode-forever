@@ -223,6 +223,50 @@ describe("tool.find-tool-calls (V1)", () => {
       expect(parsed.matched).toBe(3)
     }),
   )
+
+  it.instance("redacts secrets in model-visible fields but keeps details retrieval unredacted", () =>
+    Effect.gen(function* () {
+      yield* seed
+      const { db } = yield* Database.Service
+      yield* db
+        .insert(MessageTable)
+        .values({
+          id: MessageID.make("msg_call_secret"),
+          session_id: sessionID,
+          time_created: 1,
+          data: { role: "assistant" as const, agent: "build", time: { created: 0 } },
+        })
+        .onConflictDoNothing()
+        .run()
+        .pipe(Effect.orDie)
+      yield* db
+        .insert(PartTable)
+        .values([
+          toolPart({
+            id: "call_secret",
+            tool: "bash",
+            output: "deploy failed with key sk-proj-abcdef1234567890ABCDEF",
+            input: { command: 'curl -H "Authorization: Bearer ghp_abcdefghij1234567890ABCD" https://api.example.com' },
+          }),
+        ])
+        .run()
+        .pipe(Effect.orDie)
+      const find = yield* Tool.init(yield* FindToolCallsTool)
+      const parsed = JSON.parse((yield* find.execute({ query: "deploy failed" }, ctx(sessionID))).output)
+      expect(parsed.matched).toBe(1)
+      const entry = parsed.calls[0]
+      expect(entry.call_id).toBe("call_secret")
+      expect(entry.preview).not.toContain("sk-proj-abcdef")
+      expect(entry.preview).toContain("[REDACTED:api_key]")
+      expect(entry.input).not.toContain("ghp_abcdefghij")
+      expect(entry.input).toContain("[REDACTED:bearer]")
+      const bySecret = JSON.parse((yield* find.execute({ query: "sk-proj-abcdef1234567890ABCDEF" }, ctx(sessionID))).output)
+      expect(bySecret.matched).toBe(1)
+      const details = yield* Tool.init(yield* GetToolCallDetailsTool)
+      const full = JSON.parse((yield* details.execute({ call_id: "call_secret" }, ctx(sessionID))).output)
+      expect(full.output).toContain("sk-proj-abcdef1234567890ABCDEF")
+    }),
+  )
 })
 
 describe("tool.get-tool-call-overview (V1)", () => {

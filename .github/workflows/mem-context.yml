@@ -83,6 +83,13 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Run V1 memory retrieval tests
+        # The V1 find/details/overview tools and redaction live in packages/opencode
+        # and are not part of the core suite above.
+        working-directory: packages/opencode
+        timeout-minutes: 10
+        run: bun test test/tool/memory-retrieval-v1.test.ts 2>&1 | tee "$GITHUB_WORKSPACE/v1-retrieval-test.log"
+
       - name: Typecheck opencode
         working-directory: packages/opencode
         timeout-minutes: 15
