@@ -5,6 +5,7 @@ import { Layer } from "effect"
 import { BashTool } from "./bash"
 import { ApplyPatchTool } from "./apply-patch"
 import { EditTool } from "./edit"
+import { FindToolCallsTool } from "./find-tool-calls"
 import { GetToolCallDetailsTool } from "./get-tool-call-details"
 import { GlobTool } from "./glob"
 import { GrepTool } from "./grep"
@@ -36,6 +37,7 @@ export const node = makeLocationNode({
     ApplyPatchTool.node,
     BashTool.node,
     EditTool.node,
+    FindToolCallsTool.node,
     GetToolCallDetailsTool.node,
     GlobTool.node,
     GrepTool.node,
