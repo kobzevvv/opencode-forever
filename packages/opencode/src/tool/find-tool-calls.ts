@@ -2,6 +2,7 @@ import { Effect, Schema } from "effect"
 import { and, eq, sql } from "drizzle-orm"
 import { Database } from "@opencode-ai/core/database/database"
 import { PartTable } from "@opencode-ai/core/session/sql"
+import type { SessionID } from "../session/schema"
 import * as Tool from "./tool"
 
 const DEFAULT_LIMIT = 20
@@ -46,7 +47,7 @@ const inputSummary = (input: unknown) => {
   return entries.length === 0 ? undefined : bound(entries.join(" "), INPUT_SUMMARY_CHARS)
 }
 
-type Candidate = {
+export type Candidate = {
   call_id: string
   tool: string
   status: string
@@ -83,6 +84,21 @@ const candidate = (data: unknown, id: string): Candidate | undefined => {
   }
 }
 
+export const collectCandidates = (db: Database.Interface["db"], sessionID: SessionID) =>
+  Effect.gen(function* () {
+    const rows = yield* db
+      .select({ id: PartTable.id, data: PartTable.data })
+      .from(PartTable)
+      .where(and(eq(PartTable.session_id, sessionID), sql`json_extract(${PartTable.data}, '$.type') = 'tool'`))
+      .orderBy(PartTable.time_created)
+      .all()
+      .pipe(Effect.orDie)
+    return rows.flatMap((row) => {
+      const item = candidate(row.data, row.id)
+      return item === undefined ? [] : [item]
+    })
+  })
+
 export const FindToolCallsTool = Tool.define<typeof Parameters, Metadata, Database.Service>(
   "find_tool_calls",
   Effect.gen(function* () {
@@ -106,24 +122,12 @@ export const FindToolCallsTool = Tool.define<typeof Parameters, Metadata, Databa
           })
           const regex = params.query === undefined ? undefined : new RegExp(params.query, "i")
           const limit = Math.max(1, Math.min(params.limit ?? DEFAULT_LIMIT, MAX_LIMIT))
-          const rows = yield* db
-            .select({ id: PartTable.id, data: PartTable.data })
-            .from(PartTable)
-            .where(and(eq(PartTable.session_id, ctx.sessionID), sql`json_extract(${PartTable.data}, '$.type') = 'tool'`))
-            .orderBy(PartTable.time_created)
-            .all()
-            .pipe(Effect.orDie)
-          const matched = rows
-            .flatMap((row) => {
-              const item = candidate(row.data, row.id)
-              return item === undefined ? [] : [item]
-            })
-            .filter((item) => {
-              if (params.tool !== undefined && item.tool !== params.tool) return false
-              if (params.status !== undefined && item.status !== params.status) return false
-              if (regex !== undefined && !regex.test(item.haystack)) return false
-              return true
-            })
+          const matched = (yield* collectCandidates(db, ctx.sessionID)).filter((item) => {
+            if (params.tool !== undefined && item.tool !== params.tool) return false
+            if (params.status !== undefined && item.status !== params.status) return false
+            if (regex !== undefined && !regex.test(item.haystack)) return false
+            return true
+          })
           const calls = matched
             .slice(-limit)
             .reverse()

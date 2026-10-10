@@ -7,6 +7,7 @@ import { Database } from "../database/database"
 import { makeLocationNode } from "../effect/app-node"
 import { PermissionV2 } from "../permission"
 import { SessionMessage } from "../session/message"
+import { SessionSchema } from "../session/schema"
 import { SessionMessageTable } from "../session/sql"
 import { ToolRegistry } from "./registry"
 import { Tool } from "./tool"
@@ -78,7 +79,7 @@ const contentText = (content: readonly SessionMessage.ToolStateCompleted["conten
     .map((part) => (part.type === "text" ? part.text : `[${part.mime}${part.name === undefined ? "" : `: ${part.name}`}]`))
     .join("\n")
 
-type Candidate = {
+export type Candidate = {
   readonly call_id: string
   readonly tool: string
   readonly status: string
@@ -127,6 +128,30 @@ const shellCandidate = (message: SessionMessage.Shell, seq: number): Candidate =
   }
 }
 
+export const collectCandidates = (
+  db: Database.Interface["db"],
+  sessionID: SessionSchema.ID,
+): Effect.Effect<readonly Candidate[]> =>
+  Effect.gen(function* () {
+    const rows = yield* db
+      .select()
+      .from(SessionMessageTable)
+      .where(eq(SessionMessageTable.session_id, sessionID))
+      .orderBy(asc(SessionMessageTable.seq))
+      .all()
+      .pipe(Effect.orDie)
+    const candidates: Candidate[] = []
+    for (const row of rows) {
+      const message = yield* decodeMessage({ ...row.data, id: row.id, type: row.type }).pipe(
+        Effect.catch(() => Effect.succeed(undefined)),
+      )
+      if (!message) continue
+      if (message.type === "shell") candidates.push(shellCandidate(message, row.seq))
+      else if (message.type === "assistant") candidates.push(...toolCandidates(message, row.seq))
+    }
+    return candidates
+  })
+
 const layer = Layer.effectDiscard(
   Effect.gen(function* () {
     const tools = yield* Tools.Service
@@ -159,22 +184,7 @@ const layer = Layer.effectDiscard(
                 catch: () => new ToolFailure({ message: `Invalid query regular expression: ${input.query}` }),
               })
               const limit = Math.max(1, Math.min(input.limit ?? DEFAULT_LIMIT, MAX_LIMIT))
-              const rows = yield* db
-                .select()
-                .from(SessionMessageTable)
-                .where(eq(SessionMessageTable.session_id, context.sessionID))
-                .orderBy(asc(SessionMessageTable.seq))
-                .all()
-                .pipe(Effect.orDie)
-              const candidates: Candidate[] = []
-              for (const row of rows) {
-                const message = yield* decodeMessage({ ...row.data, id: row.id, type: row.type }).pipe(
-                  Effect.catch(() => Effect.succeed(undefined)),
-                )
-                if (!message) continue
-                if (message.type === "shell") candidates.push(shellCandidate(message, row.seq))
-                else if (message.type === "assistant") candidates.push(...toolCandidates(message, row.seq))
-              }
+              const candidates = yield* collectCandidates(db, context.sessionID)
               const matched = candidates.filter((candidate) => {
                 if (input.tool !== undefined && candidate.tool !== input.tool) return false
                 if (input.status !== undefined && candidate.status !== input.status) return false
