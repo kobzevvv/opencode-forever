@@ -157,4 +157,32 @@ describe("MemoryContext.project", () => {
     const projected = compact(messages, { minOutputChars: 2000 })
     expect(toolText(projected[1]!)).toBe("short")
   })
+
+  test("tags PII categories in tool markers", () => {
+    const text = `${big()} contact vova@example.com card 4111 1111 1111 1111`
+    const messages = [user("u1"), assistant("a1", [completedTool({ id: "call_p", name: "bash", content: [{ type: "text", text }] })]), user("u2")]
+    const marker = toolText(compact(messages)[1]!)
+    expect(marker).toContain("pii=email,credit_card")
+    expect(marker).toContain("retrieve=get_tool_call_details")
+  })
+
+  test("omits pii tag for clean output", () => {
+    const messages = [user("u1"), assistant("a1", [completedTool({ id: "call_c", name: "bash", content: [{ type: "text", text: big() }] })]), user("u2")]
+    expect(toolText(compact(messages)[1]!)).not.toContain("pii=")
+  })
+
+  test("tags PII in compacted shell output", () => {
+    const shell = SessionMessage.Shell.make({
+      id: id("sh2"),
+      type: "shell",
+      callID: "call_sh2",
+      command: "cat contacts.txt",
+      output: `${big()}\nadmin@site.org`,
+      time: { created },
+    })
+    const messages = [user("u1"), shell, user("u2")]
+    const message = compact(messages)[1]
+    if (message === undefined || message.type !== "shell") throw new Error("expected shell")
+    expect(message.output).toContain("pii=email")
+  })
 })

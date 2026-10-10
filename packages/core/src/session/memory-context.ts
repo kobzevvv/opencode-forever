@@ -1,6 +1,7 @@
 export * as MemoryContext from "./memory-context"
 
 import { Flag } from "../flag/flag"
+import { PII } from "./pii"
 import { SessionMessage } from "./message"
 
 export type Kind = "bash" | "url" | "artifact" | "generic"
@@ -69,6 +70,7 @@ type MarkerArgs = {
   readonly text: string
   readonly summary?: string
   readonly outputPaths?: readonly string[]
+  readonly pii?: string
 }
 
 const toolMarker = (args: MarkerArgs) =>
@@ -76,6 +78,7 @@ const toolMarker = (args: MarkerArgs) =>
     "[mem:compacted tool result]",
     `kind=${args.kind} tool=${args.name} call_id=${args.callID} status=success`,
     args.summary,
+    args.pii,
     `preview=${preview(args.text)}`,
     args.outputPaths && args.outputPaths.length > 0
       ? `output_paths=${args.outputPaths.slice(0, 5).join(",")}`
@@ -91,12 +94,14 @@ type ShellArgs = {
   readonly messageID: string
   readonly sessionID?: string
   readonly text: string
+  readonly pii?: string
 }
 
 const shellMarker = (args: ShellArgs) =>
   [
     "[mem:compacted shell output]",
     `command=${args.command.slice(0, SUMMARY_LIMIT)}`,
+    args.pii,
     `preview=${preview(args.text)}`,
     `original=session ${args.sessionID ?? "?"} message ${args.messageID} (full output kept in SQLite history)`,
   ].join("\n")
@@ -125,6 +130,7 @@ export const project = (
     if (message.type === "shell") {
       if (message.output.length < minChars) return message
       compacted++
+      const pii = PII.tag(message.output)
       return {
         ...message,
         output: shellMarker({
@@ -132,6 +138,7 @@ export const project = (
           messageID: message.id,
           ...(options.sessionID === undefined ? {} : { sessionID: options.sessionID }),
           text: message.output,
+          ...(pii === undefined ? {} : { pii }),
         }),
       }
     }
@@ -145,6 +152,7 @@ export const project = (
       const text = serializeContent(item.state.content)
       if (text.length < minChars) return item
       const kind = detectKind(item.name, item.state.input, text)
+      const pii = PII.tag(text)
       changed = true
       compacted++
       return {
@@ -165,6 +173,7 @@ export const project = (
                   ? {}
                   : { summary: kindSummary(kind, item.state.input)! }),
                 ...(item.state.outputPaths === undefined ? {} : { outputPaths: item.state.outputPaths }),
+                ...(pii === undefined ? {} : { pii }),
               }),
             },
           ],
