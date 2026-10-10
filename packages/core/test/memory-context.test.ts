@@ -4,6 +4,7 @@ import { SessionMessage } from "@opencode-ai/core/session/message"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { MemoryContext } from "@opencode-ai/core/session/memory-context"
+import { SessionV1 } from "@opencode-ai/core/v1/session"
 
 const created = DateTime.makeUnsafe(0)
 const id = (value: string) => SessionMessage.ID.make(`msg_${value}`)
@@ -184,5 +185,195 @@ describe("MemoryContext.project", () => {
     const message = compact(messages)[1]
     if (message === undefined || message.type !== "shell") throw new Error("expected shell")
     expect(message.output).toContain("pii=email")
+  })
+})
+
+const v1sid = "ses_v1_test"
+const v1partBase = (messageID: string, id: string) => ({
+  id: `prt_${id}`,
+  sessionID: v1sid,
+  messageID: `msg_${messageID}`,
+})
+
+const v1user = (value: string): SessionV1.WithParts => ({
+  info: {
+    id: `msg_${value}`,
+    sessionID: v1sid,
+    role: "user",
+    time: { created: 0 },
+    agent: "user",
+    model: { providerID: "p", modelID: "m" },
+  } as unknown as SessionV1.User,
+  parts: [{ ...v1partBase(value, `${value}p`), type: "text", text: "prompt" }] as SessionV1.Part[],
+})
+
+const v1assistant = (value: string, parts: SessionV1.Part[]): SessionV1.WithParts => ({
+  info: {
+    id: `msg_${value}`,
+    sessionID: v1sid,
+    role: "assistant",
+    time: { created: 0, completed: 0 },
+    parentID: "msg_parent",
+    modelID: "m",
+    providerID: "p",
+    mode: "build",
+    agent: "build",
+    path: { cwd: "/", root: "/" },
+    cost: 0,
+    tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+  } as unknown as SessionV1.Assistant,
+  parts,
+})
+
+const v1tool = (args: {
+  id: string
+  tool: string
+  output: string
+  input?: Record<string, unknown>
+  status?: string
+  metadata?: Record<string, unknown>
+}): SessionV1.Part =>
+  ({
+    ...v1partBase("a", args.id),
+    type: "tool",
+    callID: args.id,
+    tool: args.tool,
+    state:
+      args.status === "error"
+        ? { status: "error", input: args.input ?? {}, error: "boom", time: { start: 0, end: 1 } }
+        : {
+            status: "completed",
+            input: args.input ?? {},
+            output: args.output,
+            title: args.tool,
+            metadata: {},
+            time: { start: 0, end: 1 },
+          },
+    ...(args.metadata === undefined ? {} : { metadata: args.metadata }),
+  }) as unknown as SessionV1.Part
+
+const v1toolText = (message: SessionV1.WithParts, index = 0) => {
+  const part = message.parts[index]
+  if (part === undefined || part.type !== "tool" || part.state.status !== "completed")
+    throw new Error("expected completed tool")
+  return part.state.output
+}
+
+const compactV1 = (messages: readonly SessionV1.WithParts[], overrides?: Partial<MemoryContext.Options>) =>
+  MemoryContext.projectV1(messages, { enabled: true, minOutputChars: 100, keepRecentUserTurns: 1, ...overrides })
+
+describe("MemoryContext.projectV1", () => {
+  test("disabled flag returns identical array", () => {
+    const messages = [v1user("u1"), v1assistant("a1", [v1tool({ id: "call_1", tool: "bash", output: big() })])]
+    expect(MemoryContext.projectV1(messages, { enabled: false })).toBe(messages)
+  })
+
+  test("compacts old V1 tool output into retrieval marker", () => {
+    const messages = [
+      v1user("u1"),
+      v1assistant("a1", [v1tool({ id: "call_1", tool: "bash", output: big(), input: { command: "npm test" } })]),
+      v1user("u2"),
+    ]
+    const marker = v1toolText(compactV1(messages)[1]!)
+    expect(marker).toContain("[mem:compacted tool result]")
+    expect(marker).toContain("kind=bash")
+    expect(marker).toContain("call_id=call_1")
+    expect(marker).toContain("command=npm test")
+    expect(marker).toContain("retrieve=get_tool_call_details")
+    expect(marker.length).toBeLessThan(1000)
+  })
+
+  test("keeps V1 originals untouched", () => {
+    const messages = [
+      v1user("u1"),
+      v1assistant("a1", [v1tool({ id: "call_1", tool: "bash", output: big() })]),
+      v1user("u2"),
+    ]
+    const before = v1toolText(messages[1]!)
+    compactV1(messages)
+    expect(v1toolText(messages[1]!)).toBe(before)
+  })
+
+  test("never compacts the protected recent V1 turn", () => {
+    const messages = [v1user("u1"), v1assistant("a1", [v1tool({ id: "call_1", tool: "bash", output: big() })])]
+    expect(v1toolText(compactV1(messages)[1]!)).toBe(big())
+  })
+
+  test("does not compact failed V1 tool results", () => {
+    const messages = [
+      v1user("u1"),
+      v1assistant("a1", [v1tool({ id: "call_err", tool: "bash", output: big(), status: "error" })]),
+      v1user("u2"),
+    ]
+    const part = compactV1(messages)[1]!.parts[0]!
+    if (part.type !== "tool" || part.state.status !== "error") throw new Error("expected error tool")
+    expect(part.state.error).toBe("boom")
+  })
+
+  test("does not compact provider-executed V1 tools", () => {
+    const messages = [
+      v1user("u1"),
+      v1assistant("a1", [
+        v1tool({ id: "call_pe", tool: "bash", output: big(), metadata: { providerExecuted: true } }),
+      ]),
+      v1user("u2"),
+    ]
+    expect(v1toolText(compactV1(messages)[1]!)).toBe(big())
+  })
+
+  test("does not compact memory tools in V1", () => {
+    const messages = [
+      v1user("u1"),
+      v1assistant("a1", [v1tool({ id: "call_m", tool: "get_tool_call_details", output: big() })]),
+      v1user("u2"),
+    ]
+    expect(v1toolText(compactV1(messages)[1]!)).toBe(big())
+  })
+
+  test("does not recompact already compacted V1 outputs", () => {
+    const messages = [
+      v1user("u1"),
+      v1assistant("a1", [v1tool({ id: "call_c", tool: "bash", output: "[Old tool result content cleared]" })]),
+      v1user("u2"),
+    ]
+    expect(v1toolText(compactV1(messages)[1]!)).toBe("[Old tool result content cleared]")
+  })
+
+  test("respects minOutputChars in V1", () => {
+    const messages = [
+      v1user("u1"),
+      v1assistant("a1", [v1tool({ id: "call_s", tool: "bash", output: "short" })]),
+      v1user("u2"),
+    ]
+    expect(v1toolText(compactV1(messages, { minOutputChars: 2000 })[1]!)).toBe("short")
+  })
+
+  test("detects url and artifact kinds in V1", () => {
+    const messages = [
+      v1user("u1"),
+      v1assistant("a1", [
+        v1tool({ id: "call_u", tool: "webfetch", output: big(), input: { url: "https://example.com" } }),
+      ]),
+      v1assistant("a2", [v1tool({ id: "call_j", tool: "read", output: big(), input: { path: "docs/report.json" } })]),
+      v1user("u2"),
+    ]
+    const projected = compactV1(messages)
+    expect(v1toolText(projected[1]!)).toContain("kind=url")
+    expect(v1toolText(projected[1]!)).toContain("url=https://example.com")
+    expect(v1toolText(projected[2]!)).toContain("kind=artifact")
+    expect(v1toolText(projected[2]!)).toContain("path=docs/report.json")
+  })
+
+  test("tags PII in V1 markers", () => {
+    const messages = [
+      v1user("u1"),
+      v1assistant("a1", [
+        v1tool({ id: "call_p", tool: "bash", output: `${big()} contact vova@example.com card 4111 1111 1111 1111` }),
+      ]),
+      v1user("u2"),
+    ]
+    const marker = v1toolText(compactV1(messages)[1]!)
+    expect(marker).toContain("pii=email,credit_card")
+    expect(marker).toContain("retrieve=get_tool_call_details")
   })
 })

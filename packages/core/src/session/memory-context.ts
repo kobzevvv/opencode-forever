@@ -3,6 +3,7 @@ export * as MemoryContext from "./memory-context"
 import { Flag } from "../flag/flag"
 import { PII } from "./pii"
 import { SessionMessage } from "./message"
+import { SessionV1 } from "../v1/session"
 
 export type Kind = "bash" | "url" | "artifact" | "generic"
 
@@ -188,6 +189,73 @@ export const project = (
       }
     })
     return changed ? { ...message, content } : message
+  })
+
+  if (compacted > 0 && Flag.OPENCODE_MEMORY_CONTEXT_DEBUG)
+    console.log(
+      `[mem-context] session=${options.sessionID ?? "?"} compacted=${compacted} protected_from=${protectedFrom}`,
+    )
+  return projected
+}
+
+// V1 (SessionPrompt) projection: the production run/TUI path converts
+// SessionV1.WithParts[] via toModelMessagesEffect and never touches the V2
+// runner, so the flag has to hook here as well or compression is dead code.
+export const projectV1 = (
+  messages: readonly SessionV1.WithParts[],
+  options: Options = {},
+): readonly SessionV1.WithParts[] => {
+  const enabled = options.enabled ?? Flag.OPENCODE_MEMORY_CONTEXT
+  if (!enabled) return messages
+  const minChars = options.minOutputChars ?? DEFAULT_MIN_OUTPUT_CHARS
+  const keepTurns = options.keepRecentUserTurns ?? DEFAULT_KEEP_RECENT_USER_TURNS
+
+  const userIndices: number[] = []
+  messages.forEach((message, index) => {
+    if (message.info.role === "user") userIndices.push(index)
+  })
+  if (userIndices.length === 0) return messages
+  const protectedFrom =
+    userIndices.length > keepTurns ? userIndices[userIndices.length - keepTurns]! : userIndices[0]!
+  if (protectedFrom <= 0) return messages
+
+  let compacted = 0
+  const projected = messages.map((message, index) => {
+    if (index >= protectedFrom) return message
+    if (message.info.role !== "assistant") return message
+    let changed = false
+    const parts = message.parts.map((part) => {
+      if (part.type !== "tool") return part
+      if (part.state.status !== "completed") return part
+      if (part.state.time.compacted !== undefined) return part
+      if (part.metadata?.providerExecuted === true) return part
+      if (MEMORY_TOOL_PATTERN.test(part.tool)) return part
+      const text = part.state.output
+      if (text.length < minChars) return part
+      const kind = detectKind(part.tool, part.state.input, text)
+      const pii = PII.tag(text)
+      changed = true
+      compacted++
+      return {
+        ...part,
+        state: {
+          ...part.state,
+          output: toolMarker({
+            kind,
+            name: part.tool,
+            callID: part.callID,
+            messageID: message.info.id,
+            ...(options.sessionID === undefined ? {} : { sessionID: options.sessionID }),
+            text,
+            ...(kindSummary(kind, part.state.input) === undefined
+              ? {}
+              : { summary: kindSummary(kind, part.state.input)! }),
+            ...(pii === undefined ? {} : { pii }),
+          }),
+        },
+      }
+    })
+    return changed ? { ...message, parts } : message
   })
 
   if (compacted > 0 && Flag.OPENCODE_MEMORY_CONTEXT_DEBUG)
