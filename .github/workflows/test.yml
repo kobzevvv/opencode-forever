@@ -23,14 +23,22 @@ env:
 jobs:
   unit:
     name: unit (${{ matrix.settings.name }})
+    # Upstream Blacksmith runners are fast and cached; github-hosted runners
+    # are slower (timing-sensitive subprocess tests flake, e.g. the 15s
+    # unknown-model budget) and the Windows ripgrep download times out. On the
+    # fork this job is informational — mem-context.yml's "core full suite" is
+    # the blocking regression gate.
+    continue-on-error: ${{ github.repository != 'anomalyco/opencode' }}
     strategy:
       fail-fast: false
       matrix:
         settings:
+          # Fork without the Blacksmith app falls back to github-hosted runners
+          # so PR checks never sit in `queued` forever.
           - name: linux
-            host: blacksmith-4vcpu-ubuntu-2404
+            host: ${{ github.repository == 'anomalyco/opencode' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-latest' }}
           - name: windows
-            host: blacksmith-4vcpu-windows-2025
+            host: ${{ github.repository == 'anomalyco/opencode' && 'blacksmith-4vcpu-windows-2025' || 'windows-latest' }}
     runs-on: ${{ matrix.settings.host }}
     defaults:
       run:
@@ -81,6 +89,9 @@ jobs:
 
   e2e:
     name: e2e (${{ matrix.settings.name }})
+    # Playwright browser e2e is irrelevant to the memory-context fork and slow
+    # on github-hosted runners; only upstream runs it.
+    if: github.repository == 'anomalyco/opencode'
     strategy:
       fail-fast: false
       matrix:
