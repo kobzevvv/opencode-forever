@@ -11,15 +11,20 @@ const EMAIL = /(?<![\w.+-])[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}(?![\w.
 const CARD = /(?<!\w)(?:\d[ -]?){12,18}\d(?!\w)/g
 const INTERNATIONAL_PHONE = /\+\d[\d ()-]{6,20}\d/g
 const SEPARATED_RUN = /(?<!\w)(?:\d[ .-]?){9,14}\d(?!\w)/g
-const API_KEY_PATTERNS: readonly RegExp[] = [
+const API_KEY_BARE: readonly RegExp[] = [
   /\b(?:sk|pk|rk)-[A-Za-z0-9_-]{16,}\b/g,
   /\bgh[pousr]_[A-Za-z0-9]{20,}\b/g,
   /\bxox[abprs]-[A-Za-z0-9-]{10,}\b/g,
   /\bAKIA[0-9A-Z]{16}\b/g,
   /\bAIza[0-9A-Za-z_-]{30,}\b/g,
   /\bya29\.[0-9A-Za-z_-]{20,}\b/g,
-  /(?<![\w-])(?:api[_-]?key|apikey|secret|access[_-]?token|auth[_-]?token|password)["']?\s*[:=]\s*["']?[A-Za-z0-9_./+-]{16,}(?![\w-])/gi,
 ]
+// Capture group keeps the parameter name visible when the value is redacted.
+const API_KEY_ASSIGNMENT =
+  /(?<![\w-])((?:api[_-]?key|apikey|secret|access[_-]?token|auth[_-]?token|password)["']?\s*[:=]\s*)["']?[A-Za-z0-9_./+-]{16,}(?![\w-])/gi
+const API_KEY_PATTERNS: readonly RegExp[] = [...API_KEY_BARE, API_KEY_ASSIGNMENT]
+const URL_SECRET_PARAM = /([?&](?:access[_-]?token|api[_-]?key|auth|credential|key|password|secret|sig|signature|token)=)[^&\s"'<>]+/gi
+const BEARER_TOKEN = /\b(Bearer\s+)[A-Za-z0-9._~+/=-]{16,}/gi
 
 const CATEGORIES: readonly PIICategory[] = ["email", "phone", "credit_card", "api_key"]
 
@@ -115,4 +120,49 @@ export const detect = (text: string): Report => {
 export const tag = (text: string): string | undefined => {
   const report = detect(text)
   return report.types.length === 0 ? undefined : `pii=${report.types.join(",")}`
+}
+
+export type Redaction = {
+  readonly text: string
+  readonly redacted: readonly string[]
+}
+
+// Replaces credential-bearing content with self-describing placeholders before
+// text is placed into compact markers, search previews or telemetry. Emails and
+// phone numbers are intentionally kept (tag-only): they are not credentials and
+// the pii= tag already flags them. Full originals stay in SQLite and remain
+// retrievable via get_tool_call_details.
+export const redact = (text: string): Redaction => {
+  const found = new Set<string>()
+  let out = text
+  out = out.replace(URL_SECRET_PARAM, (_match, prefix: string) => {
+    found.add("url_secret")
+    return `${prefix}[REDACTED:url_secret]`
+  })
+  out = out.replace(BEARER_TOKEN, (_match, prefix: string) => {
+    found.add("bearer")
+    return `${prefix}[REDACTED:bearer]`
+  })
+  for (const pattern of API_KEY_BARE) {
+    out = out.replace(pattern, () => {
+      found.add("api_key")
+      return "[REDACTED:api_key]"
+    })
+  }
+  out = out.replace(API_KEY_ASSIGNMENT, (_match, prefix: string) => {
+    found.add("api_key")
+    return `${prefix}[REDACTED:api_key]`
+  })
+  const cards: Span[] = []
+  countMatches(CARD, out, (match) => {
+    const digits = digitsOf(match[0])
+    if (digits.length >= 13 && digits.length <= 19 && luhn(digits))
+      cards.push({ start: match.index, end: match.index + match[0].length })
+  })
+  for (let index = cards.length - 1; index >= 0; index--) {
+    const span = cards[index]
+    out = out.slice(0, span.start) + "[REDACTED:credit_card]" + out.slice(span.end)
+  }
+  if (cards.length > 0) found.add("credit_card")
+  return { text: out, redacted: [...found] }
 }

@@ -186,6 +186,58 @@ describe("MemoryContext.project", () => {
     if (message === undefined || message.type !== "shell") throw new Error("expected shell")
     expect(message.output).toContain("pii=email")
   })
+
+  test("redacts API keys from tool marker preview", () => {
+    const secret = "sk-proj-abcdef1234567890ABCDEF"
+    const messages = [
+      user("u1"),
+      assistant("a1", [completedTool({ id: "call_r", name: "bash", content: [{ type: "text", text: `${big()} token ${secret}` }] })]),
+      user("u2"),
+    ]
+    const marker = toolText(compact(messages)[1]!)
+    expect(marker).not.toContain(secret)
+    expect(marker).toContain("[REDACTED:api_key]")
+    expect(marker).toContain("pii=api_key")
+  })
+
+  test("redacts secrets in shell marker command and preview", () => {
+    const token = "ghp_abcdefghijklmnopqrstuv123456"
+    const shell = SessionMessage.Shell.make({
+      id: id("sh3"),
+      type: "shell",
+      callID: "call_sh3",
+      command: `curl -H "Authorization: Bearer ${token}" https://api.example.com`,
+      output: `${big()}\nfailed for ${token}`,
+      time: { created },
+    })
+    const messages = [user("u1"), shell, user("u2")]
+    const message = compact(messages)[1]
+    if (message === undefined || message.type !== "shell") throw new Error("expected shell")
+    expect(message.output).not.toContain(token)
+    expect(message.output).toContain("[REDACTED:api_key]")
+    expect(message.output).toContain("[mem:compacted shell output]")
+    expect(message.command).toContain("[REDACTED:bearer]")
+    expect(message.command).not.toContain(token)
+  })
+
+  test("redacts secret URL params in url kind summary", () => {
+    const messages = [
+      user("u1"),
+      assistant("a1", [
+        completedTool({
+          id: "call_ur",
+          name: "webfetch",
+          content: [{ type: "text", text: big() }],
+          input: { url: "https://api.example.com/data?api_key=abcdef1234567890&limit=5" },
+        }),
+      ]),
+      user("u2"),
+    ]
+    const marker = toolText(compact(messages)[1]!)
+    expect(marker).not.toContain("abcdef1234567890")
+    expect(marker).toContain("api_key=[REDACTED:url_secret]")
+    expect(marker).toContain("limit=5")
+  })
 })
 
 const v1sid = "ses_v1_test"
@@ -374,6 +426,20 @@ describe("MemoryContext.projectV1", () => {
     ]
     const marker = v1toolText(compactV1(messages)[1]!)
     expect(marker).toContain("pii=email,credit_card")
+    expect(marker).toContain("retrieve=get_tool_call_details")
+  })
+
+  test("redacts API keys in V1 markers", () => {
+    const secret = "sk-proj-abcdef1234567890ABCDEF"
+    const messages = [
+      v1user("u1"),
+      v1assistant("a1", [v1tool({ id: "call_r", tool: "bash", output: `${big()} key ${secret}` })]),
+      v1user("u2"),
+    ]
+    const marker = v1toolText(compactV1(messages)[1]!)
+    expect(marker).not.toContain(secret)
+    expect(marker).toContain("[REDACTED:api_key]")
+    expect(marker).toContain("pii=api_key")
     expect(marker).toContain("retrieve=get_tool_call_details")
   })
 })

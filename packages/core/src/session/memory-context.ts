@@ -46,11 +46,11 @@ const detectKind = (name: string, input: Record<string, unknown>, text: string):
 const kindSummary = (kind: Kind, input: Record<string, unknown>) => {
   if (kind === "bash") {
     const command = inputString(input, "command")
-    if (command !== undefined) return `command=${command.slice(0, SUMMARY_LIMIT)}`
+    if (command !== undefined) return `command=${PII.redact(command).text.slice(0, SUMMARY_LIMIT)}`
   }
   if (kind === "url") {
     const url = inputString(input, "url")
-    if (url !== undefined) return `url=${url.slice(0, SUMMARY_LIMIT)}`
+    if (url !== undefined) return `url=${PII.redact(url).text.slice(0, SUMMARY_LIMIT)}`
   }
   if (kind === "artifact") {
     const path = inputString(input, "path") ?? inputString(input, "file_path") ?? inputString(input, "filePath")
@@ -59,8 +59,12 @@ const kindSummary = (kind: Kind, input: Record<string, unknown>) => {
   return undefined
 }
 
-const preview = (text: string) =>
-  text.length <= PREVIEW_HEAD + PREVIEW_TAIL + 16 ? text : `${text.slice(0, PREVIEW_HEAD)}\n...\n${text.slice(-PREVIEW_TAIL)}`
+const preview = (text: string) => {
+  const clean = PII.redact(text).text
+  return clean.length <= PREVIEW_HEAD + PREVIEW_TAIL + 16
+    ? clean
+    : `${clean.slice(0, PREVIEW_HEAD)}\n...\n${clean.slice(-PREVIEW_TAIL)}`
+}
 
 type MarkerArgs = {
   readonly kind: Kind
@@ -102,7 +106,7 @@ type ShellArgs = {
 const shellMarker = (args: ShellArgs) =>
   [
     "[mem:compacted shell output]",
-    `command=${args.command.slice(0, SUMMARY_LIMIT)}`,
+    `command=${PII.redact(args.command).text.slice(0, SUMMARY_LIMIT)}`,
     `call_id=${args.callID} status=success`,
     args.pii,
     `preview=${preview(args.text)}`,
@@ -140,6 +144,10 @@ export const project = (
       const pii = PII.tag(message.output)
       return {
         ...message,
+        // The runner renders "Shell command: <command>" next to the output, so
+        // the command field itself must be redacted or secrets in curl headers
+        // would bypass the compact marker. The original stays in SQLite.
+        command: PII.redact(message.command).text,
         output: shellMarker({
           command: message.command,
           callID: message.callID,

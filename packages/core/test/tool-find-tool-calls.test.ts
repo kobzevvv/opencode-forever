@@ -132,6 +132,20 @@ const setup = Effect.gen(function* () {
         }),
       ]),
       shellRow(SessionMessage.ID.make("msg_shell_1"), 4, "call_shell_1", "git status", "nothing to commit"),
+      assistantRow(SessionMessage.ID.make("msg_call_4"), 5, [
+        SessionMessage.AssistantTool.make({
+          type: "tool",
+          id: "call_secret",
+          name: "bash",
+          state: SessionMessage.ToolStateCompleted.make({
+            status: "completed",
+            input: { command: 'curl -H "Authorization: Bearer ghp_abcdefghij1234567890ABCD" https://api.example.com' },
+            content: [{ type: "text", text: "deploy failed with key sk-proj-abcdef1234567890ABCDEF" }],
+            structured: {},
+          }),
+          time: { created },
+        }),
+      ]),
     ])
     .run()
     .pipe(Effect.orDie)
@@ -156,12 +170,13 @@ describe("FindToolCallsTool", () => {
       yield* setup
       const registry = yield* ToolRegistry.Service
       const output = parsed(yield* executeTool(registry, call({})))
-      expect(output["matched"]).toBe(4)
+      expect(output["matched"]).toBe(5)
       const calls = callsOf(output)
-      expect(calls.length).toBe(4)
+      expect(calls.length).toBe(5)
       expect(calls[0]!["tool"]).toBe("bash")
-      expect(calls[0]!["call_id"]).toBe("call_shell_1")
-      expect(calls[0]!["input"]).toContain("git status")
+      expect(calls[0]!["call_id"]).toBe("call_secret")
+      const shell = calls.find((candidate) => candidate["call_id"] === "call_shell_1")
+      expect(String(shell?.["input"])).toContain("git status")
     }),
   )
 
@@ -197,10 +212,10 @@ describe("FindToolCallsTool", () => {
       yield* setup
       const registry = yield* ToolRegistry.Service
       const output = parsed(yield* executeTool(registry, call({ tool: "bash", limit: 1 })))
-      expect(output["matched"]).toBe(3)
+      expect(output["matched"]).toBe(4)
       const calls = callsOf(output)
       expect(calls.length).toBe(1)
-      expect(calls[0]!["call_id"]).toBe("call_shell_1")
+      expect(calls[0]!["call_id"]).toBe("call_secret")
     }),
   )
 
@@ -231,6 +246,22 @@ describe("FindToolCallsTool", () => {
       const registry = yield* ToolRegistry.Service
       const result = yield* executeTool(registry, call({ query: "(unclosed" }))
       expect(result.type).toBe("error")
+    }),
+  )
+
+  it.effect("redacts secrets in model-visible fields but keeps them searchable", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const registry = yield* ToolRegistry.Service
+      const output = parsed(yield* executeTool(registry, call({ tool: "bash", query: "deploy failed" })))
+      const entry = callsOf(output).find((candidate) => candidate["call_id"] === "call_secret")
+      expect(entry).toBeDefined()
+      expect(String(entry?.["preview"])).not.toContain("sk-proj-abcdef")
+      expect(String(entry?.["preview"])).toContain("[REDACTED:api_key]")
+      expect(String(entry?.["input"])).not.toContain("ghp_abcdefghij")
+      expect(String(entry?.["input"])).toContain("[REDACTED:bearer]")
+      const bySecret = callsOf(parsed(yield* executeTool(registry, call({ query: "sk-proj-abcdef1234567890ABCDEF" }))))
+      expect(bySecret.map((candidate) => candidate["call_id"])).toEqual(["call_secret"])
     }),
   )
 })
