@@ -91,6 +91,7 @@ const toolMarker = (args: MarkerArgs) =>
 
 type ShellArgs = {
   readonly command: string
+  readonly callID: string
   readonly messageID: string
   readonly sessionID?: string
   readonly text: string
@@ -101,10 +102,14 @@ const shellMarker = (args: ShellArgs) =>
   [
     "[mem:compacted shell output]",
     `command=${args.command.slice(0, SUMMARY_LIMIT)}`,
+    `call_id=${args.callID} status=success`,
     args.pii,
     `preview=${preview(args.text)}`,
     `original=session ${args.sessionID ?? "?"} message ${args.messageID} (full output kept in SQLite history)`,
-  ].join("\n")
+    `retrieve=get_tool_call_details(call_id="${args.callID}")`,
+  ]
+    .filter((line): line is string => line !== undefined)
+    .join("\n")
 
 export const project = (
   messages: readonly SessionMessage.Message[],
@@ -128,13 +133,15 @@ export const project = (
   const projected = messages.map((message, index) => {
     if (index >= protectedFrom) return message
     if (message.type === "shell") {
-      if (message.output.length < minChars) return message
+      // Without a callID the original cannot be retrieved later, so keep the output intact.
+      if (message.output.length < minChars || message.callID === "") return message
       compacted++
       const pii = PII.tag(message.output)
       return {
         ...message,
         output: shellMarker({
           command: message.command,
+          callID: message.callID,
           messageID: message.id,
           ...(options.sessionID === undefined ? {} : { sessionID: options.sessionID }),
           text: message.output,
