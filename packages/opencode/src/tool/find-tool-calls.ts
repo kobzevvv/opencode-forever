@@ -54,9 +54,10 @@ type Candidate = {
   preview?: string
   error?: string
   haystack: string
+  seq: string
 }
 
-const candidate = (data: unknown, id: string) => {
+const candidate = (data: unknown, id: string): Candidate | undefined => {
   if (typeof data !== "object" || data === null) return undefined
   const part = data as {
     type?: string
