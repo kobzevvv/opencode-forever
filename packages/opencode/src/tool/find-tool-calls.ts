@@ -113,7 +113,10 @@ export const FindToolCallsTool = Tool.define<typeof Parameters, Metadata, Databa
             .all()
             .pipe(Effect.orDie)
           const matched = rows
-            .flatMap((row) => candidate(row.data, row.id))
+            .flatMap((row) => {
+              const item = candidate(row.data, row.id)
+              return item === undefined ? [] : [item]
+            })
             .filter((item) => {
               if (params.tool !== undefined && item.tool !== params.tool) return false
               if (params.status !== undefined && item.status !== params.status) return false
@@ -125,8 +128,9 @@ export const FindToolCallsTool = Tool.define<typeof Parameters, Metadata, Databa
             .reverse()
             .map(({ haystack: _haystack, seq: _seq, ...item }) => item)
           return {
-            calls,
-            matched: matched.length,
+            title: `${matched.length} matching tool calls`,
+            output: JSON.stringify({ calls, matched: matched.length }, null, 2),
+            metadata: { matched: matched.length },
           }
         }),
     } satisfies Tool.DefWithoutID<typeof Parameters, Metadata>

@@ -35,7 +35,7 @@ const toolPart = (args: {
   session_id: sessionID,
   time_created: 0,
   data: {
-    type: "tool",
+    type: "tool" as const,
     callID: args.id,
     tool: args.tool,
     state:
@@ -80,7 +80,7 @@ const seed = Effect.gen(function* () {
         id: MessageID.make(`msg_${id}`),
         session_id: sessionID,
         time_created: 0,
-        data: { role: "assistant" },
+        data: { role: "assistant" as const, agent: "build", time: { created: 0 } },
       })),
     )
     .onConflictDoNothing()
@@ -108,7 +108,7 @@ const ctx = (sid: SessionID): Tool.Context => ({
 })
 
 describe("tool.get-tool-call-details (V1)", () => {
-  it.effect("returns full output by call_id from PartTable", () =>
+  it.instance("returns full output by call_id from PartTable", () =>
     Effect.gen(function* () {
       yield* seed
       const def = yield* Tool.init(yield* GetToolCallDetailsTool)
@@ -122,7 +122,7 @@ describe("tool.get-tool-call-details (V1)", () => {
     }),
   )
 
-  it.effect("respects max_chars", () =>
+  it.instance("respects max_chars", () =>
     Effect.gen(function* () {
       yield* seed
       const def = yield* Tool.init(yield* GetToolCallDetailsTool)
@@ -133,7 +133,7 @@ describe("tool.get-tool-call-details (V1)", () => {
     }),
   )
 
-  it.effect("returns error state output", () =>
+  it.instance("returns error state output", () =>
     Effect.gen(function* () {
       yield* seed
       const def = yield* Tool.init(yield* GetToolCallDetailsTool)
@@ -145,7 +145,7 @@ describe("tool.get-tool-call-details (V1)", () => {
     }),
   )
 
-  it.effect("returns found=false for unknown call_id", () =>
+  it.instance("returns found=false for unknown call_id", () =>
     Effect.gen(function* () {
       yield* seed
       const def = yield* Tool.init(yield* GetToolCallDetailsTool)
@@ -154,7 +154,7 @@ describe("tool.get-tool-call-details (V1)", () => {
     }),
   )
 
-  it.effect("scopes lookup to the session", () =>
+  it.instance("scopes lookup to the session", () =>
     Effect.gen(function* () {
       yield* seed
       const def = yield* Tool.init(yield* GetToolCallDetailsTool)
@@ -165,7 +165,7 @@ describe("tool.get-tool-call-details (V1)", () => {
 })
 
 describe("tool.find-tool-calls (V1)", () => {
-  it.effect("lists tool calls newest-first", () =>
+  it.instance("lists tool calls newest-first", () =>
     Effect.gen(function* () {
       yield* seed
       const def = yield* Tool.init(yield* FindToolCallsTool)
@@ -180,7 +180,7 @@ describe("tool.find-tool-calls (V1)", () => {
     }),
   )
 
-  it.effect("filters by tool and status", () =>
+  it.instance("filters by tool and status", () =>
     Effect.gen(function* () {
       yield* seed
       const def = yield* Tool.init(yield* FindToolCallsTool)
@@ -191,7 +191,7 @@ describe("tool.find-tool-calls (V1)", () => {
     }),
   )
 
-  it.effect("filters by regex query over input and output", () =>
+  it.instance("filters by regex query over input and output", () =>
     Effect.gen(function* () {
       yield* seed
       const def = yield* Tool.init(yield* FindToolCallsTool)
@@ -202,7 +202,7 @@ describe("tool.find-tool-calls (V1)", () => {
     }),
   )
 
-  it.effect("bounds previews", () =>
+  it.instance("bounds previews", () =>
     Effect.gen(function* () {
       yield* seed
       const def = yield* Tool.init(yield* FindToolCallsTool)
@@ -212,7 +212,7 @@ describe("tool.find-tool-calls (V1)", () => {
     }),
   )
 
-  it.effect("respects limit", () =>
+  it.instance("respects limit", () =>
     Effect.gen(function* () {
       yield* seed
       const def = yield* Tool.init(yield* FindToolCallsTool)
