@@ -23,6 +23,12 @@ env:
 jobs:
   unit:
     name: unit (${{ matrix.settings.name }})
+    # Upstream Blacksmith runners are fast and cached; github-hosted runners
+    # are slower (timing-sensitive subprocess tests flake, e.g. the 15s
+    # unknown-model budget) and the Windows ripgrep download times out. On the
+    # fork this job is informational — mem-context.yml's "core full suite" is
+    # the blocking regression gate.
+    continue-on-error: ${{ github.repository != 'anomalyco/opencode' }}
     strategy:
       fail-fast: false
       matrix:
