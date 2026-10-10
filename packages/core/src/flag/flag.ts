@@ -75,4 +75,10 @@ export const Flag = {
   get OPENCODE_CLIENT() {
     return process.env["OPENCODE_CLIENT"] ?? "cli"
   },
+  get OPENCODE_MEMORY_CONTEXT() {
+    return truthy("OPENCODE_MEMORY_CONTEXT")
+  },
+  get OPENCODE_MEMORY_CONTEXT_DEBUG() {
+    return truthy("OPENCODE_MEMORY_CONTEXT_DEBUG")
+  },
 }
