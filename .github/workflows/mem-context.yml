@@ -35,7 +35,7 @@ jobs:
       - name: Run memory-context tests
         working-directory: packages/core
         timeout-minutes: 10
-        run: bun test test/memory-context.test.ts test/memory-context-savings.test.ts test/tool-get-call-details.test.ts test/tool-find-tool-calls.test.ts test/pii.test.ts 2>&1 | tee "$GITHUB_WORKSPACE/mem-context-test.log"
+        run: bun test test/memory-context.test.ts test/memory-context-savings.test.ts test/tool-get-call-details.test.ts test/tool-find-tool-calls.test.ts test/tool-get-tool-call-overview.test.ts test/pii.test.ts 2>&1 | tee "$GITHUB_WORKSPACE/mem-context-test.log"
 
       - name: Report savings
         if: always()

@@ -12,6 +12,7 @@ import { Tool } from "@/tool/tool"
 import { Truncate } from "@/tool/truncate"
 import { GetToolCallDetailsTool } from "../../src/tool/get-tool-call-details"
 import { FindToolCallsTool } from "../../src/tool/find-tool-calls"
+import { GetToolCallOverviewTool } from "../../src/tool/get-tool-call-overview"
 import { disposeAllInstances } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 
@@ -220,6 +221,78 @@ describe("tool.find-tool-calls (V1)", () => {
       const parsed = JSON.parse(result.output)
       expect(parsed.calls.length).toBe(1)
       expect(parsed.matched).toBe(3)
+    }),
+  )
+})
+
+describe("tool.get-tool-call-overview (V1)", () => {
+  it.instance("groups by tool with status counts, busiest first", () =>
+    Effect.gen(function* () {
+      yield* seed
+      const def = yield* Tool.init(yield* GetToolCallOverviewTool)
+      const result = yield* def.execute({}, ctx(sessionID))
+      const parsed = JSON.parse(result.output)
+      expect(parsed.total).toBe(3)
+      expect(parsed.groups_total).toBe(2)
+      expect(parsed.groups.map((group: { tool: string }) => group.tool)).toEqual(["bash", "read"])
+      expect(parsed.groups[0].count).toBe(2)
+      expect(parsed.groups[0].statuses).toEqual([
+        { status: "completed", count: 1 },
+        { status: "error", count: 1 },
+      ])
+      expect(parsed.groups[1].count).toBe(1)
+    }),
+  )
+
+  it.instance("shows recent example calls retrievable by call_id", () =>
+    Effect.gen(function* () {
+      yield* seed
+      const def = yield* Tool.init(yield* GetToolCallOverviewTool)
+      const result = yield* def.execute({}, ctx(sessionID))
+      const parsed = JSON.parse(result.output)
+      const examples = parsed.groups[0].examples
+      expect(examples.map((example: { call_id: string }) => example.call_id)).toEqual(["call_err", "call_big"])
+      expect(examples[0].error).toContain("exit code 1")
+      const details = yield* Tool.init(yield* GetToolCallDetailsTool)
+      const full = yield* details.execute({ call_id: examples[1].call_id }, ctx(sessionID))
+      expect(JSON.parse(full.output).found).toBe(true)
+    }),
+  )
+
+  it.instance("filters by tool and status", () =>
+    Effect.gen(function* () {
+      yield* seed
+      const def = yield* Tool.init(yield* GetToolCallOverviewTool)
+      const byTool = JSON.parse((yield* def.execute({ tool: "read" }, ctx(sessionID))).output)
+      expect(byTool.total).toBe(1)
+      expect(byTool.groups.map((group: { tool: string }) => group.tool)).toEqual(["read"])
+      const byStatus = JSON.parse((yield* def.execute({ status: "error" }, ctx(sessionID))).output)
+      expect(byStatus.total).toBe(1)
+      expect(byStatus.groups[0].statuses).toEqual([{ status: "error", count: 1 }])
+    }),
+  )
+
+  it.instance("limits groups and bounds examples", () =>
+    Effect.gen(function* () {
+      yield* seed
+      const def = yield* Tool.init(yield* GetToolCallOverviewTool)
+      const limited = JSON.parse((yield* def.execute({ limit: 1 }, ctx(sessionID))).output)
+      expect(limited.groups_total).toBe(2)
+      expect(limited.groups.length).toBe(1)
+      const bounded = JSON.parse((yield* def.execute({ examples: 1 }, ctx(sessionID))).output)
+      expect(bounded.groups[0].examples.length).toBe(1)
+      expect(String(bounded.groups[0].examples[0].input ?? "").length).toBeLessThanOrEqual(160)
+    }),
+  )
+
+  it.instance("scopes the overview to the session", () =>
+    Effect.gen(function* () {
+      yield* seed
+      const def = yield* Tool.init(yield* GetToolCallOverviewTool)
+      const result = yield* def.execute({}, ctx(SessionID.make("ses_overview_other")))
+      const parsed = JSON.parse(result.output)
+      expect(parsed.total).toBe(0)
+      expect(parsed.groups.length).toBe(0)
     }),
   )
 })

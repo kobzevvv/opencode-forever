@@ -7,6 +7,7 @@ import { ApplyPatchTool } from "./apply-patch"
 import { EditTool } from "./edit"
 import { FindToolCallsTool } from "./find-tool-calls"
 import { GetToolCallDetailsTool } from "./get-tool-call-details"
+import { GetToolCallOverviewTool } from "./get-tool-call-overview"
 import { GlobTool } from "./glob"
 import { GrepTool } from "./grep"
 import { QuestionTool } from "./question"
@@ -39,6 +40,7 @@ export const node = makeLocationNode({
     EditTool.node,
     FindToolCallsTool.node,
     GetToolCallDetailsTool.node,
+    GetToolCallOverviewTool.node,
     GlobTool.node,
     GrepTool.node,
     QuestionTool.node,

@@ -28,6 +28,7 @@ import { Provider } from "@/provider/provider"
 import { WebSearchTool } from "./websearch"
 import { GetToolCallDetailsTool } from "./get-tool-call-details"
 import { FindToolCallsTool } from "./find-tool-calls"
+import { GetToolCallOverviewTool } from "./get-tool-call-overview"
 import { LspTool } from "./lsp"
 import * as Truncate from "./truncate"
 import { ApplyPatchTool } from "./apply_patch"
@@ -111,6 +112,7 @@ const layer = Layer.effect(
     const websearch = yield* WebSearchTool
     const getToolCallDetails = yield* GetToolCallDetailsTool
     const findToolCalls = yield* FindToolCallsTool
+    const getToolCallOverview = yield* GetToolCallOverviewTool
     const shell = yield* ShellTool
     const globtool = yield* GlobTool
     const writetool = yield* WriteTool
@@ -229,6 +231,7 @@ const layer = Layer.effect(
           plan: Tool.init(plan),
           getToolCallDetails: Tool.init(getToolCallDetails),
           findToolCalls: Tool.init(findToolCalls),
+          getToolCallOverview: Tool.init(getToolCallOverview),
           ...(codeModeTool ? { execute: Tool.init(codeModeTool) } : {}),
         })
 
@@ -247,6 +250,7 @@ const layer = Layer.effect(
             tool.fetch,
             tool.getToolCallDetails,
             tool.findToolCalls,
+            tool.getToolCallOverview,
             tool.todo,
             tool.search,
             tool.skill,
