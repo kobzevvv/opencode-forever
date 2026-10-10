@@ -51,3 +51,39 @@ jobs:
         working-directory: packages/core
         timeout-minutes: 15
         run: bun run typecheck
+
+  core-suite:
+    # Fork regression gate: the targeted job above only covers memory-context
+    # files, so a change like registering a new builtin can break other core
+    # tests unnoticed (see ISSUES.md CI-1). Run the full core suite instead.
+    name: core full suite
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Setup Bun
+        uses: ./.github/actions/setup-bun
+
+      - name: Run full core suite
+        working-directory: packages/core
+        timeout-minutes: 25
+        run: bun test 2>&1 | tee "$GITHUB_WORKSPACE/core-suite.log"
+
+      - name: Report core suite failures
+        if: failure()
+        run: |
+          {
+            echo "## Core suite failures"
+            echo '```'
+            grep -E "\(fail\)" "$GITHUB_WORKSPACE/core-suite.log" | tail -40 || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Typecheck opencode
+        working-directory: packages/opencode
+        timeout-minutes: 15
+        run: bun run typecheck
