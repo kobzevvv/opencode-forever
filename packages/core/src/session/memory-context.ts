@@ -12,10 +12,12 @@ export type Options = {
   readonly enabled?: boolean
   readonly minOutputChars?: number
   readonly keepRecentUserTurns?: number
+  readonly keepRecentAssistantTurns?: number
 }
 
 const DEFAULT_MIN_OUTPUT_CHARS = 2000
 const DEFAULT_KEEP_RECENT_USER_TURNS = 2
+const DEFAULT_KEEP_RECENT_ASSISTANT_TURNS = 2
 const PREVIEW_HEAD = 400
 const PREVIEW_TAIL = 200
 const SUMMARY_LIMIT = 200
@@ -123,16 +125,16 @@ export const project = (
   const enabled = options.enabled ?? Flag.OPENCODE_MEMORY_CONTEXT
   if (!enabled) return messages
   const minChars = options.minOutputChars ?? DEFAULT_MIN_OUTPUT_CHARS
-  const keepTurns = options.keepRecentUserTurns ?? DEFAULT_KEEP_RECENT_USER_TURNS
 
   const userIndices: number[] = []
+  const assistantIndices: number[] = []
   messages.forEach((message, index) => {
     if (message.type === "user") userIndices.push(index)
+    if (message.type === "assistant") assistantIndices.push(index)
   })
   if (userIndices.length === 0) return messages
-  const protectedFrom =
-    userIndices.length > keepTurns ? userIndices[userIndices.length - keepTurns]! : userIndices[0]!
-  if (protectedFrom <= 0) return messages
+  const protectedFrom = protectedStartIndex(userIndices, assistantIndices, options)
+  if (protectedFrom === undefined || protectedFrom <= 0) return messages
 
   let compacted = 0
   const projected = messages.map((message, index) => {
@@ -216,16 +218,16 @@ export const projectV1 = (
   const enabled = options.enabled ?? Flag.OPENCODE_MEMORY_CONTEXT
   if (!enabled) return messages
   const minChars = options.minOutputChars ?? DEFAULT_MIN_OUTPUT_CHARS
-  const keepTurns = options.keepRecentUserTurns ?? DEFAULT_KEEP_RECENT_USER_TURNS
 
   const userIndices: number[] = []
+  const assistantIndices: number[] = []
   messages.forEach((message, index) => {
     if (message.info.role === "user") userIndices.push(index)
+    if (message.info.role === "assistant") assistantIndices.push(index)
   })
   if (userIndices.length === 0) return messages
-  const protectedFrom =
-    userIndices.length > keepTurns ? userIndices[userIndices.length - keepTurns]! : userIndices[0]!
-  if (protectedFrom <= 0) return messages
+  const protectedFrom = protectedStartIndex(userIndices, assistantIndices, options)
+  if (protectedFrom === undefined || protectedFrom <= 0) return messages
 
   let compacted = 0
   const projected = messages.map((message, index) => {
@@ -271,4 +273,30 @@ export const projectV1 = (
       `[mem-context] session=${options.sessionID ?? "?"} compacted=${compacted} protected_from=${protectedFrom}`,
     )
   return projected
+}
+
+// First index that must stay verbatim. Two windows qualify:
+// - the conversation window: from the Nth-from-last user turn on (needs more
+//   than N user turns, otherwise there is no such window at all);
+// - the working set: the last N assistant messages, so a single long agent
+//   turn (one user prompt, many tool results) can still be compressed — older
+//   tool outputs are exactly what the compact markers exist for.
+// The earlier (more protective) start wins; when neither window exists there
+// is nothing that can be safely compressed.
+const protectedStartIndex = (
+  userIndices: readonly number[],
+  assistantIndices: readonly number[],
+  options: Options,
+): number | undefined => {
+  const keepUserTurns = options.keepRecentUserTurns ?? DEFAULT_KEEP_RECENT_USER_TURNS
+  const keepAssistantTurns = options.keepRecentAssistantTurns ?? DEFAULT_KEEP_RECENT_ASSISTANT_TURNS
+  const conversationWindow =
+    userIndices.length > keepUserTurns ? userIndices[userIndices.length - keepUserTurns] : undefined
+  const workingSet =
+    assistantIndices.length > keepAssistantTurns
+      ? assistantIndices[assistantIndices.length - keepAssistantTurns]
+      : undefined
+  if (conversationWindow === undefined) return workingSet
+  if (workingSet === undefined) return conversationWindow
+  return Math.min(conversationWindow, workingSet)
 }
