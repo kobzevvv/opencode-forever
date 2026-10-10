@@ -86,6 +86,21 @@ describe("MemoryContext.project", () => {
     expect(toolText(projected[1]!)).toBe(big())
   })
 
+  test("compacts inside a single user turn but keeps the assistant working set verbatim", () => {
+    const messages = [
+      user("u1"),
+      assistant("a1", [completedTool({ id: "call_1", name: "read", content: [{ type: "text", text: big() }], input: { path: "file1.txt" } })]),
+      assistant("a2", [completedTool({ id: "call_2", name: "read", content: [{ type: "text", text: big() }], input: { path: "file2.txt" } })]),
+      assistant("a3", [completedTool({ id: "call_3", name: "bash", content: [{ type: "text", text: big() }], input: { command: "wc -l file2.txt" } })]),
+    ]
+    const projected = compact(messages)
+    expect(toolText(projected[1]!)).toContain("[mem:compacted tool result]")
+    expect(toolText(projected[1]!)).toContain("call_id=call_1")
+    expect(toolText(projected[1]!)).toContain("kind=generic")
+    expect(toolText(projected[2]!)).toBe(big())
+    expect(toolText(projected[3]!)).toBe(big())
+  })
+
   test("does not compact failed tool results", () => {
     const failed = SessionMessage.AssistantTool.make({
       type: "tool",
@@ -349,6 +364,21 @@ describe("MemoryContext.projectV1", () => {
   test("never compacts the protected recent V1 turn", () => {
     const messages = [v1user("u1"), v1assistant("a1", [v1tool({ id: "call_1", tool: "bash", output: big() })])]
     expect(v1toolText(compactV1(messages)[1]!)).toBe(big())
+  })
+
+  test("compacts inside a single V1 user turn but keeps the assistant working set verbatim", () => {
+    const messages = [
+      v1user("u1"),
+      v1assistant("a1", [v1tool({ id: "call_1", tool: "read", output: big(), input: { path: "file1.txt" } })]),
+      v1assistant("a2", [v1tool({ id: "call_2", tool: "read", output: big(), input: { path: "file2.txt" } })]),
+      v1assistant("a3", [v1tool({ id: "call_3", tool: "bash", output: big(), input: { command: "wc -l file2.txt" } })]),
+    ]
+    const projected = compactV1(messages)
+    expect(v1toolText(projected[1]!)).toContain("[mem:compacted tool result]")
+    expect(v1toolText(projected[1]!)).toContain("call_id=call_1")
+    expect(v1toolText(projected[1]!)).toContain("retrieve=get_tool_call_details")
+    expect(v1toolText(projected[2]!)).toBe(big())
+    expect(v1toolText(projected[3]!)).toBe(big())
   })
 
   test("does not compact failed V1 tool results", () => {
